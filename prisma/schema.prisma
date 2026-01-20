@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  drawings DrawingPath[]
+}
+
+model DrawingPath {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId   String?
+  session     DrawingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  
+  tool        String   @default("pencil")
+  points      String   // JSON字符串存储点坐标
+  color       String
+  lineWidth   Int      @default(2)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model DrawingSession {
+  id          String   @id @default(cuid())
+  name        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  paths       DrawingPath[]
+}
