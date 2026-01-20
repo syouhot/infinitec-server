@@ -8,7 +8,11 @@
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "keywords": ["express", "rest", "api"],
+  "keywords": [
+    "express",
+    "rest",
+    "api"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -17,7 +21,8 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
-    "jsonwebtoken": "^9.0.3"
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

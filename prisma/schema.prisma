@@ -16,6 +16,8 @@ model User {
   updatedAt DateTime @updatedAt
   
   drawings DrawingPath[]
+  ownedRooms Room[] @relation("RoomOwner")
+  roomMembers RoomMember[]
 }
 
 model DrawingPath {
@@ -26,7 +28,7 @@ model DrawingPath {
   session     DrawingSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
   
   tool        String   @default("pencil")
-  points      String   // JSON字符串存储点坐标
+  points      String
   color       String
   lineWidth   Int      @default(2)
   
@@ -41,4 +43,31 @@ model DrawingSession {
   updatedAt   DateTime @updatedAt
   
   paths       DrawingPath[]
+}
+
+model Room {
+  id          String   @id @default(cuid())
+  roomId      String   @unique
+  name        String?  @default("未命名房间")
+  password    String?
+  ownerId     String
+  owner       User     @relation("RoomOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  maxUsers    Int      @default(10)
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  members     RoomMember[]
+}
+
+model RoomMember {
+  id          String   @id @default(cuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String   @default("member")
+  joinedAt    DateTime @default(now())
+  
+  @@unique([roomId, userId])
 }
