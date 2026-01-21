@@ -1,0 +1,3 @@
+export const HEARTBEAT_INTERVAL = 10
+
+export const MAX_FAILED_HEARTBEATS = 3

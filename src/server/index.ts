@@ -1,6 +1,7 @@
 import prisma from '../lib/prisma'
 import { Request, Response, Express } from 'express'
 import { generateToken, verifyToken } from '../utils/jwt'
+import { clients } from '../index'
 
 interface RegisterRequestBody {
     name: string
@@ -257,6 +258,29 @@ export function setupRoutes(app: Express) {
             }
 
             if (room.ownerId === payload.userId) {
+                const members = await prisma.roomMember.findMany({
+                    where: {
+                        roomId: room.id
+                    }
+                })
+                
+                for (const member of members) {
+                    const clientId = `${room.roomId}_${member.userId}`
+                    const client = clients.get(clientId)
+                    
+                    if (client) {
+                        try {
+                            client.ws.send(JSON.stringify({
+                                type: 'room_deleted',
+                                roomId: room.roomId
+                            }))
+                            console.log(`通知用户 ${member.userId} 房间 ${room.roomId} 已解散`)
+                        } catch (error) {
+                            console.error(`通知用户 ${member.userId} 失败:`, error)
+                        }
+                    }
+                }
+                
                 await prisma.room.delete({
                     where: { id: room.id }
                 })
@@ -386,6 +410,29 @@ export function setupRoutes(app: Express) {
 
             if (room.ownerId !== payload.userId) {
                 return res.status(403).json({ error: '只有房主才能解散房间' })
+            }
+
+            const members = await prisma.roomMember.findMany({
+                where: {
+                    roomId: room.id
+                }
+            })
+            
+            for (const member of members) {
+                const clientId = `${room.roomId}_${member.userId}`
+                const client = clients.get(clientId)
+                
+                if (client) {
+                    try {
+                        client.ws.send(JSON.stringify({
+                            type: 'room_deleted',
+                            roomId: room.roomId
+                        }))
+                        console.log(`通知用户 ${member.userId} 房间 ${room.roomId} 已解散`)
+                    } catch (error) {
+                        console.error(`通知用户 ${member.userId} 失败:`, error)
+                    }
+                }
             }
 
             await prisma.room.delete({
