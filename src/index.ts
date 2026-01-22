@@ -86,6 +86,15 @@ wss.on('connection', (ws: any, req: any) => {
             }))
           }
         }
+      } else if (data.type === 'draw_event') {
+        // 广播绘画事件给房间内其他用户
+        if (roomId) {
+          clients.forEach((client) => {
+            if (client.roomId === roomId && client.userId !== userId) {
+              client.ws.send(JSON.stringify(data))
+            }
+          })
+        }
       }
     } catch (error) {
       console.error('处理WebSocket消息错误:', error)
