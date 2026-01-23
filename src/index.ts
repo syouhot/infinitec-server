@@ -86,6 +86,15 @@ wss.on('connection', (ws: any, req: any) => {
             }))
           }
         }
+      } else if (data.type === 'draw_event') {
+        // 广播绘画事件给房间内其他用户
+        if (roomId) {
+          clients.forEach((client) => {
+            if (client.roomId === roomId && client.userId !== userId) {
+              client.ws.send(JSON.stringify(data))
+            }
+          })
+        }
       }
     } catch (error) {
       console.error('处理WebSocket消息错误:', error)
@@ -185,6 +194,31 @@ const heartbeatCheckInterval = setInterval(async () => {
           console.log(`用户 ${member.userId} (房间: ${room.roomId}) 未连接WebSocket`)
           
           if (member.userId === room.ownerId) {
+            // Notify other members before deleting room
+            const otherMembers = await prisma.roomMember.findMany({
+              where: {
+                roomId: room.id,
+                userId: { not: member.userId }
+              }
+            })
+
+            for (const otherMember of otherMembers) {
+              const clientKey = `${room.roomId}_${otherMember.userId}`
+              const client = clients.get(clientKey)
+              if (client) {
+                try {
+                  client.ws.send(JSON.stringify({
+                    type: 'room_deleted',
+                    roomId: room.roomId,
+                    reason: 'owner_disconnected'
+                  }))
+                  console.log(`通知成员 ${otherMember.userId} 房主断开连接，房间解散`)
+                } catch (err) {
+                  console.error(`通知成员 ${otherMember.userId} 失败:`, err)
+                }
+              }
+            }
+
             await prisma.room.delete({
               where: {
                 id: room.id
@@ -219,6 +253,31 @@ const heartbeatCheckInterval = setInterval(async () => {
         const updatedClient = clients.get(clientId)
         if (updatedClient && updatedClient.failedHeartbeats >= MAX_FAILED_HEARTBEATS) {
           if (member.userId === room.ownerId) {
+             // Notify other members before deleting room
+             const otherMembers = await prisma.roomMember.findMany({
+              where: {
+                roomId: room.id,
+                userId: { not: member.userId }
+              }
+            })
+
+            for (const otherMember of otherMembers) {
+              const clientKey = `${room.roomId}_${otherMember.userId}`
+              const client = clients.get(clientKey)
+              if (client) {
+                try {
+                  client.ws.send(JSON.stringify({
+                    type: 'room_deleted',
+                    roomId: room.roomId,
+                    reason: 'owner_timeout'
+                  }))
+                  console.log(`通知成员 ${otherMember.userId} 房主心跳超时，房间解散`)
+                } catch (err) {
+                  console.error(`通知成员 ${otherMember.userId} 失败:`, err)
+                }
+              }
+            }
+
             await prisma.room.delete({
               where: {
                 id: room.id
