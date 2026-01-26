@@ -194,7 +194,7 @@ const heartbeatCheckInterval = setInterval(async () => {
           console.log(`用户 ${member.userId} (房间: ${room.roomId}) 未连接WebSocket`)
           
           if (member.userId === room.ownerId) {
-            // Notify other members before deleting room
+            // 删除房间前通知其他成员
             const otherMembers = await prisma.roomMember.findMany({
               where: {
                 roomId: room.id,
