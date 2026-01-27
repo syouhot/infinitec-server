@@ -27,6 +27,7 @@ const wss = new WebSocketServer({ server })
 interface ClientConnection {
   ws: any
   userId: string
+  userName?: string
   roomId: string
   failedHeartbeats: number
   lastHeartbeat: number
@@ -35,6 +36,30 @@ interface ClientConnection {
 const clients = new Map<string, ClientConnection>()
 
 export { clients }
+
+function broadcastRoomUsers(roomId: string) {
+  const roomUsers: { userId: string, userName: string }[] = []
+  
+  clients.forEach(client => {
+    if (client.roomId === roomId) {
+      roomUsers.push({
+        userId: client.userId,
+        userName: client.userName || `User ${client.userId.slice(0, 4)}`
+      })
+    }
+  })
+
+  const message = JSON.stringify({
+    type: 'room_users_update',
+    data: { users: roomUsers }
+  })
+
+  clients.forEach(client => {
+    if (client.roomId === roomId && client.ws.readyState === 1) { // WebSocket.OPEN
+      client.ws.send(message)
+    }
+  })
+}
 
 wss.on('connection', (ws: any, req: any) => {
   console.log('新的WebSocket连接')
@@ -49,24 +74,40 @@ wss.on('connection', (ws: any, req: any) => {
       if (data.type === 'join') {
         userId = data.userId
         roomId = data.roomId
+        let userName = data.userName
         
         if (userId && roomId) {
+          // Attempt to fetch real name from DB
+          try {
+             const user = await prisma.user.findUnique({ where: { id: userId } })
+             if (user && user.name) {
+                 userName = user.name
+             }
+          } catch (e) {
+             console.error("Failed to fetch user name from DB:")
+            //  console.error("Failed to fetch user name from DB:", e)
+          }
+
           const clientId = `${roomId}_${userId}`
           clients.set(clientId, {
             ws,
             userId,
+            userName,
             roomId,
             failedHeartbeats: 0,
             lastHeartbeat: Date.now()
           })
           
-          console.log(`用户 ${userId} 加入房间 ${roomId}`)
+          console.log(`用户 ${userName || userId} 加入房间 ${roomId}`)
           
           ws.send(JSON.stringify({
             type: 'joined',
             roomId,
             userId
           }))
+
+          // Broadcast user list update
+          broadcastRoomUsers(roomId)
 
           // Send snapshot if exists
           const room = await prisma.room.findUnique({
@@ -79,12 +120,13 @@ wss.on('connection', (ws: any, req: any) => {
             })
             
             if (snapshot) {
-               ws.send(JSON.stringify({
-                 type: 'snapshot_data',
-                 data: snapshot.data
-               }))
-               console.log(`向用户 ${userId} 发送房间 ${roomId} 的快照`)
-            }
+                ws.send(JSON.stringify({
+                  type: 'snapshot_data',
+                  data: snapshot.data,
+                  layerOrder: snapshot.layerOrder ? JSON.parse(snapshot.layerOrder) : null
+                }))
+                console.log(`向用户 ${userId} 发送房间 ${roomId} 的快照`)
+             }
           }
         }
       } else if (data.type === 'heartbeat') {
@@ -96,8 +138,6 @@ wss.on('connection', (ws: any, req: any) => {
             client.failedHeartbeats = 0
             client.lastHeartbeat = Date.now()
             clients.set(clientId, client)
-            
-            console.log(`收到用户 ${userId} (房间: ${roomId}) 的心跳响应`)
             
             ws.send(JSON.stringify({
               type: 'heartbeat_ack',
@@ -120,20 +160,48 @@ wss.on('connection', (ws: any, req: any) => {
              where: { roomId: roomId }
            })
            if (room && room.ownerId === userId) {
-             await prisma.roomSnapshot.upsert({
-               where: { roomId: room.id },
-               update: { data: data.data },
-               create: {
-                 roomId: room.id,
-                 data: data.data
-               }
-             })
-             console.log(`房主 ${userId} 保存了房间 ${roomId} 的快照`)
-           }
-        }
-      }
-    } catch (error) {
-      console.error('处理WebSocket消息错误:', error)
+              await prisma.roomSnapshot.upsert({
+                where: { roomId: room.id },
+                update: { 
+                  data: data.data.data,
+                  layerOrder: data.data.layerOrder ? JSON.stringify(data.data.layerOrder) : null
+                },
+                create: {
+                  roomId: room.id,
+                  data: data.data.data,
+                  layerOrder: data.data.layerOrder ? JSON.stringify(data.data.layerOrder) : null
+                }
+              })
+              console.log(`房主 ${userId} 保存了房间 ${roomId} 的快照`)
+            }
+         }
+       } else if (data.type === 'layer_order_update') {
+          // Broadcast layer order update to all clients in the room
+          if (roomId) {
+            clients.forEach((client) => {
+              if (client.roomId === roomId && client.userId !== userId) {
+                client.ws.send(JSON.stringify(data))
+              }
+            })
+            
+            // If it's the owner, also update the snapshot immediately?
+            // User requirement: "Default layer order syncs with owner... can also save to snapshot"
+            // Let's also save if owner.
+            const room = await prisma.room.findUnique({ where: { roomId: roomId } })
+            if (room && room.ownerId === userId) {
+               await prisma.roomSnapshot.updateMany({
+                 where: { roomId: room.id },
+                 data: { layerOrder: JSON.stringify(data.data.layerOrder) }
+               }).catch(e => 
+                console.error("Failed to auto-save layer order:")
+                // console.error("Failed to auto-save layer order:", e)
+              )
+            }
+          }
+       }
+     } catch (error) {
+      console.error('处理WebSocket消息错误:')
+      // console.error('处理WebSocket消息错误:', error)
     }
   })
 
@@ -142,11 +210,27 @@ wss.on('connection', (ws: any, req: any) => {
       const clientId = `${roomId}_${userId}`
       clients.delete(clientId)
       console.log(`用户 ${userId} (房间: ${roomId}) 断开连接`)
+      broadcastRoomUsers(roomId)
+      
+      // Check if owner and clear snapshot
+      try {
+        const room = await prisma.room.findUnique({ where: { roomId: roomId } })
+        if (room && room.ownerId === userId) {
+             console.log(`房主退出，清除房间 ${roomId} 快照`)
+             await prisma.roomSnapshot.deleteMany({
+                 where: { roomId: room.id }
+             })
+        }
+      } catch (e) {
+        console.error("清除快照失败:")
+        // console.error("清除快照失败:", e)
+      }
     }
   })
 
   ws.on('error', (error) => {
-    console.error('WebSocket错误:', error)
+    console.error('WebSocket错误:')
+    // console.error('WebSocket错误:', error)
   })
 })
 
@@ -335,6 +419,7 @@ const heartbeatCheckInterval = setInterval(async () => {
           
           clients.delete(clientId)
           console.log(`用户 ${member.userId} (房间: ${room.roomId}) 连续 ${MAX_FAILED_HEARTBEATS} 次心跳失败，已从房间移除`)
+          broadcastRoomUsers(room.roomId)
         }
       }
       

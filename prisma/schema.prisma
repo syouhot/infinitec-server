@@ -78,6 +78,7 @@ model RoomSnapshot {
   roomId    String   @unique
   room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   data      String   @db.LongText
+  layerOrder String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
