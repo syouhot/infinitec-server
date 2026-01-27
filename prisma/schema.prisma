@@ -58,6 +58,7 @@ model Room {
   updatedAt   DateTime @updatedAt
   
   members     RoomMember[]
+  snapshot    RoomSnapshot?
 }
 
 model RoomMember {
@@ -70,4 +71,13 @@ model RoomMember {
   joinedAt    DateTime @default(now())
   
   @@unique([roomId, userId])
+}
+
+model RoomSnapshot {
+  id        String   @id @default(cuid())
+  roomId    String   @unique
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

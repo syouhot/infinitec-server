@@ -67,6 +67,25 @@ wss.on('connection', (ws: any, req: any) => {
             roomId,
             userId
           }))
+
+          // Send snapshot if exists
+          const room = await prisma.room.findUnique({
+            where: { roomId: roomId }
+          })
+          
+          if (room) {
+            const snapshot = await prisma.roomSnapshot.findUnique({
+              where: { roomId: room.id }
+            })
+            
+            if (snapshot) {
+               ws.send(JSON.stringify({
+                 type: 'snapshot_data',
+                 data: snapshot.data
+               }))
+               console.log(`向用户 ${userId} 发送房间 ${roomId} 的快照`)
+            }
+          }
         }
       } else if (data.type === 'heartbeat') {
         if (userId && roomId) {
@@ -94,6 +113,23 @@ wss.on('connection', (ws: any, req: any) => {
               client.ws.send(JSON.stringify(data))
             }
           })
+        }
+      } else if (data.type === 'save_snapshot') {
+        if (roomId && userId) {
+           const room = await prisma.room.findUnique({
+             where: { roomId: roomId }
+           })
+           if (room && room.ownerId === userId) {
+             await prisma.roomSnapshot.upsert({
+               where: { roomId: room.id },
+               update: { data: data.data },
+               create: {
+                 roomId: room.id,
+                 data: data.data
+               }
+             })
+             console.log(`房主 ${userId} 保存了房间 ${roomId} 的快照`)
+           }
         }
       }
     } catch (error) {
