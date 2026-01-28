@@ -6,7 +6,8 @@ const JWT_EXPIRES_IN = '7d'
 export interface JWTPayload {
   userId: string
   name: string
-  phone: string
+  phone?: string
+  email: string
 }
 
 export function generateToken(payload: JWTPayload): string {

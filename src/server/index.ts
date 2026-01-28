@@ -2,10 +2,38 @@ import prisma from '../lib/prisma'
 import { Request, Response, Express } from 'express'
 import { generateToken, verifyToken } from '../utils/jwt'
 import { clients } from '../index'
+import multer from 'multer'
+import path from 'path'
+import nodemailer from 'nodemailer'
+import crypto from 'crypto'
+
+// Multer configuration
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/')
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
+        cb(null, uniqueSuffix + path.extname(file.originalname))
+    }
+})
+const upload = multer({ storage: storage })
+
+// Email configuration
+const transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_HOST,
+    port: Number(process.env.EMAIL_PORT),
+    secure: true,
+    auth: {
+        user: process.env.EMAIL,
+        pass: process.env.EMAIL_SMTP
+    }
+});
 
 interface RegisterRequestBody {
     name: string
-    phone: string
+    phone?: string
+    email: string
     password: string
 }
 
@@ -14,7 +42,7 @@ interface CheckPhoneRequestBody {
 }
 
 interface LoginRequestBody {
-    phone: string
+    email: string
     password: string
 }
 
@@ -37,49 +65,85 @@ interface DeleteRoomRequestBody {
 }
 
 export function setupRoutes(app: Express) {
+    app.post('/api/upload', upload.single('image'), (req: any, res: Response) => {
+        try {
+            if (!req.file) {
+                return res.status(400).json({ error: 'No file uploaded' })
+            }
+            const protocol = req.protocol
+            const host = req.get('host')
+            const url = `${protocol}://${host}/uploads/${req.file.filename}`
+            res.json({ url })
+        } catch (error) {
+            console.error('Upload error:', error)
+            res.status(500).json({ error: 'Upload failed' })
+        }
+    })
+
     app.post('/api/register', async (req: Request<{}, {}, RegisterRequestBody>, res: Response) => {
         try {
-            const { name, phone, password } = req.body
+            const { name, phone, email, password } = req.body
 
-            if (!name || !phone || !password) {
-                return res.status(400).json({ error: '请填写所有字段' })
+            if (!name ) {
+                return res.status(400).json({ error: '用户名不能为空' })
             }
-
-            if (phone.length !== 11) {
-                return res.status(400).json({ error: '请输入正确的手机号' })
+            if (!email ) {
+                return res.status(400).json({ error: '邮箱不能为空' })
+            }
+            if (!password) {
+                return res.status(400).json({ error: '密码不能为空' })
             }
 
             const existingUser = await prisma.user.findUnique({
-                where: { phone }
+                where: { email }
             })
 
             if (existingUser) {
-                return res.status(400).json({ error: '该手机号已被注册' })
+                return res.status(400).json({ error: '该邮箱已被注册' })
             }
+
+            const verificationToken = crypto.randomBytes(32).toString('hex')
 
             const user = await prisma.user.create({
                 data: {
                     name,
-                    phone,
-                    password
+                    phone: phone || null,
+                    email,
+                    password,
+                    isVerified: false,
+                    verificationToken
                 }
             })
 
-            const token = generateToken({
-                userId: user.id,
-                name: user.name,
-                phone: user.phone
-            })
+            const backendUrl = `${req.protocol}://${req.get('host')}/api/verify-email-link?token=${verificationToken}`
+
+            const mailOptions = {
+                from: process.env.EMAIL,
+                to: email,
+                subject: 'Infinitec 邮箱验证',
+                html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px;">
+                        <h2 style="color: #333;"> Infinitec</h2>
+                        <p>请点击下面的按钮验证您的邮箱地址：</p>
+                        <a href="${backendUrl}" style="display: inline-block; padding: 10px 20px; background-color: #1890ff; color: white; text-decoration: none; border-radius: 4px;">验证邮箱</a>
+                        <p style="margin-top: 20px; font-size: 12px; color: #666;">如果按钮无法点击，请复制以下链接到浏览器打开：</p>
+                        <p style="font-size: 12px; color: #666;">${backendUrl}</p>
+                    </div>
+                `
+            }
+
+            try {
+                await transporter.sendMail(mailOptions)
+                console.log(`Verification email sent to ${email}`)
+            } catch (emailError) {
+                console.error('Email send error:', emailError)
+                await prisma.user.delete({ where: { id: user.id } })
+                return res.status(500).json({ error: '发送验证邮件失败，请检查邮箱地址是否正确' })
+            }
 
             res.status(201).json({
                 success: true,
-                message: '注册成功',
-                token,
-                user: {
-                    id: user.id,
-                    name: user.name,
-                    phone: user.phone
-                }
+                message: '注册成功，请前往邮箱验证',
             })
         } catch (error) {
             console.error('注册错误:', error)
@@ -87,33 +151,65 @@ export function setupRoutes(app: Express) {
         }
     })
 
-    app.post('/api/login', async (req: Request<{}, {}, LoginRequestBody>, res: Response) => {
+    app.get('/api/verify-email-link', async (req: Request, res: Response) => {
         try {
-            const { phone, password } = req.body
-            if (!phone || !password) {
-                return res.status(400).json({ error: '请填写手机号和密码' })
-            }
-
-            if (phone.length !== 11) {
-                return res.status(400).json({ error: '请输入正确的手机号' })
+            const { token } = req.query
+            
+            if (!token || typeof token !== 'string') {
+                return res.status(400).send('无效的验证链接')
             }
 
             const user = await prisma.user.findUnique({
-                where: { phone }
+                where: { verificationToken: token }
             })
 
             if (!user) {
-                return res.status(401).json({ error: '手机号或密码错误' })
+                return res.status(400).send('验证链接无效或已过期')
+            }
+
+            await prisma.user.update({
+                where: { id: user.id },
+                data: {
+                    isVerified: true,
+                    verificationToken: null
+                }
+            })
+
+            res.redirect('http://localhost:5173/?verified=true')
+        } catch (error) {
+            console.error('验证错误:', error)
+            res.status(500).send('验证失败')
+        }
+    })
+
+    app.post('/api/login', async (req: Request<{}, {}, LoginRequestBody>, res: Response) => {
+        try {
+            const { email, password } = req.body
+            if (!email || !password) {
+                return res.status(400).json({ error: '请填写邮箱和密码' })
+            }
+
+            const user = await prisma.user.findUnique({
+                where: { email }
+            })
+
+            if (!user) {
+                return res.status(401).json({ error: '邮箱或密码错误' })
             }
 
             if (user.password !== password) {
-                return res.status(401).json({ error: '手机号或密码错误' })
+                return res.status(401).json({ error: '邮箱或密码错误' })
+            }
+
+            if (!user.isVerified) {
+                return res.status(401).json({ error: '请先前往邮箱完成验证' })
             }
 
             const token = generateToken({
                 userId: user.id,
                 name: user.name,
-                phone: user.phone
+                phone: user.phone || undefined,
+                email: user.email || undefined
             })
 
             res.json({
@@ -123,7 +219,8 @@ export function setupRoutes(app: Express) {
                 user: {
                     id: user.id,
                     name: user.name,
-                    phone: user.phone
+                    phone: user.phone,
+                    email: user.email
                 }
             })
         } catch (error) {
@@ -151,6 +248,77 @@ export function setupRoutes(app: Express) {
         }
     })
 
+    interface UpdateUserRequestBody {
+        name: string
+        phone?: string
+    }
+
+    app.post('/api/user/update', async (req: Request<{}, {}, UpdateUserRequestBody>, res: Response) => {
+        try {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
+                return res.status(401).json({ error: '请先登录' })
+            }
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
+            
+            if (!payload) {
+                return res.status(401).json({ error: 'Token无效或已过期' })
+            }
+
+            const { name, phone } = req.body
+
+            if (!name) {
+                return res.status(400).json({ error: '用户名不能为空' })
+            }
+
+            // Check if phone is already taken by another user
+            if (phone) {
+                const existingUser = await prisma.user.findFirst({
+                    where: {
+                        phone,
+                        id: { not: payload.userId }
+                    }
+                })
+                
+                if (existingUser) {
+                    return res.status(400).json({ error: '手机号已被其他用户使用' })
+                }
+            }
+
+            const updatedUser = await prisma.user.update({
+                where: { id: payload.userId },
+                data: { 
+                    name, 
+                    phone: phone || null 
+                }
+            })
+
+            const newToken = generateToken({
+                userId: updatedUser.id,
+                name: updatedUser.name,
+                phone: updatedUser.phone || undefined,
+                email: updatedUser.email || undefined
+            })
+
+            res.json({
+                success: true,
+                message: '更新成功',
+                token: newToken,
+                user: {
+                    id: updatedUser.id,
+                    name: updatedUser.name,
+                    phone: updatedUser.phone,
+                    email: updatedUser.email
+                }
+            })
+        } catch (error) {
+            console.error('更新用户信息错误:', error)
+            res.status(500).json({ error: '更新失败，请稍后重试' })
+        }
+    })
+
     app.post('/api/verify-token', (req: Request, res: Response) => {
         try {
             const { token } = req.body
@@ -170,7 +338,8 @@ export function setupRoutes(app: Express) {
                 user: {
                     id: payload.userId,
                     name: payload.name,
-                    phone: payload.phone
+                    phone: payload.phone,
+                    email: payload.email
                 }
             })
         } catch (error) {
