@@ -64,7 +64,70 @@ interface DeleteRoomRequestBody {
     roomId: string
 }
 
+interface ResetPasswordRequestBody {
+    email: string
+    phone: string
+}
+
 export function setupRoutes(app: Express) {
+    app.post('/api/reset-password', async (req: Request<{}, {}, ResetPasswordRequestBody>, res: Response) => {
+        try {
+            const { email, phone } = req.body
+
+            if (!email || !phone) {
+                return res.status(400).json({ error: '请填写邮箱和手机号' })
+            }
+
+            const user = await prisma.user.findFirst({
+                where: {
+                    email,
+                    phone
+                }
+            })
+
+            if (!user) {
+                return res.status(404).json({ error: '未找到匹配的用户信息' })
+            }
+
+            // Generate 8-char random password
+            const newPassword = crypto.randomBytes(4).toString('hex')
+            
+            // Hash password with salt before saving
+            const hashedPassword = crypto.createHash('sha256').update(newPassword + process.env.PASSWORD_SALT).digest('hex')
+
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { password: hashedPassword }
+            })
+
+            const mailOptions = {
+                from: process.env.EMAIL,
+                to: email,
+                subject: 'Infinitec 密码重置',
+                html: `
+                    <div style="font-family: Arial, sans-serif; padding: 20px;">
+                        <h2 style="color: #333;">Infinitec 密码重置</h2>
+                        <p>您的密码已重置成功。</p>
+                        <p>新的密码为：<strong style="font-size: 18px; color: #1890ff;">${newPassword}</strong></p>
+                        <p>请使用新密码登录，登录后建议立即修改密码。</p>
+                    </div>
+                `
+            }
+
+            try {
+                await transporter.sendMail(mailOptions)
+                res.json({ success: true, message: '新密码已发送至您的邮箱' })
+            } catch (emailError) {
+                console.error('Email send error:', emailError)
+                res.status(500).json({ error: '发送邮件失败，请稍后重试' })
+            }
+
+        } catch (error) {
+            console.error('重置密码错误:', error)
+            res.status(500).json({ error: '重置密码失败，请稍后重试' })
+        }
+    })
+
     app.post('/api/upload', upload.single('image'), (req: any, res: Response) => {
         try {
             if (!req.file) {
@@ -93,13 +156,26 @@ export function setupRoutes(app: Express) {
             if (!password) {
                 return res.status(400).json({ error: '密码不能为空' })
             }
+            if (!phone) {
+                return res.status(400).json({ error: '手机号不能为空' })
+            }
 
-            const existingUser = await prisma.user.findUnique({
-                where: { email }
+            const existingUser = await prisma.user.findFirst({
+                where: {
+                    OR: [
+                        { email },
+                        { phone }
+                    ]
+                }
             })
 
             if (existingUser) {
-                return res.status(400).json({ error: '该邮箱已被注册' })
+                if (existingUser.email === email) {
+                    return res.status(400).json({ error: '该邮箱已被注册' })
+                }
+                if (existingUser.phone === phone) {
+                    return res.status(400).json({ error: '该手机号已被注册' })
+                }
             }
 
             const verificationToken = crypto.randomBytes(32).toString('hex')
@@ -107,7 +183,7 @@ export function setupRoutes(app: Express) {
             const user = await prisma.user.create({
                 data: {
                     name,
-                    phone: phone || null,
+                    phone,
                     email,
                     password,
                     isVerified: false,
@@ -248,6 +324,45 @@ export function setupRoutes(app: Express) {
         }
     })
 
+    interface ChangePasswordRequestBody {
+        password: string
+    }
+
+    app.post('/api/user/change-password', async (req: Request<{}, {}, ChangePasswordRequestBody>, res: Response) => {
+        try {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
+                return res.status(401).json({ error: '请先登录' })
+            }
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
+            
+            if (!payload) {
+                return res.status(401).json({ error: 'Token无效或已过期' })
+            }
+
+            const { password } = req.body
+
+            if (!password) {
+                return res.status(400).json({ error: '密码不能为空' })
+            }
+
+            await prisma.user.update({
+                where: { id: payload.userId },
+                data: { password }
+            })
+
+            res.json({
+                success: true,
+                message: '修改成功'
+            })
+        } catch (error) {
+            console.error('修改密码错误:', error)
+            res.status(500).json({ error: '修改密码失败，请稍后重试' })
+        }
+    })
+
     interface UpdateUserRequestBody {
         name: string
         phone?: string
@@ -350,17 +465,18 @@ export function setupRoutes(app: Express) {
 
     app.post('/api/rooms', async (req: Request<{}, {}, CreateRoomRequestBody>, res: Response) => {
         try {
-            const { token } = req.headers
-            const { password, maxUsers } = req.body
-
-            if (!token) {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
                 return res.status(401).json({ error: '请先登录' })
             }
-
-            const payload = verifyToken(token as string)
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
             if (!payload) {
                 return res.status(401).json({ error: 'Token无效或已过期' })
             }
+
+            const { password, maxUsers } = req.body
 
             const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
 
@@ -402,17 +518,18 @@ export function setupRoutes(app: Express) {
 
     app.post('/api/rooms/leave', async (req: Request<{}, {}, LeaveRoomRequestBody>, res: Response) => {
         try {
-            const { token } = req.headers
-            const { roomId } = req.body
-
-            if (!token) {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
                 return res.status(401).json({ error: '请先登录' })
             }
-
-            const payload = verifyToken(token as string)
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
             if (!payload) {
                 return res.status(401).json({ error: 'Token无效或已过期' })
             }
+
+            const { roomId } = req.body
 
             if (!roomId) {
                 return res.status(400).json({ error: '房间ID不能为空' })
@@ -477,21 +594,23 @@ export function setupRoutes(app: Express) {
 
     app.post('/api/rooms/join', async (req: Request<{}, {}, JoinRoomRequestBody>, res: Response) => {
         try {
-            const { token } = req.headers
-            const { roomId, password } = req.body
-
-            if (!token) {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
                 return res.status(401).json({ error: '请先登录' })
             }
-
-            const payload = verifyToken(token as string)
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
             if (!payload) {
                 return res.status(401).json({ error: 'Token无效或已过期' })
             }
 
+            const { roomId, password } = req.body
+
             if (!roomId) {
                 return res.status(400).json({ error: '房间ID不能为空' })
             }
+            
 
             const room = await prisma.room.findUnique({
                 where: { roomId }
@@ -553,17 +672,18 @@ export function setupRoutes(app: Express) {
 
     app.post('/api/rooms/delete', async (req: Request<{}, {}, DeleteRoomRequestBody>, res: Response) => {
         try {
-            const { token } = req.headers
-            const { roomId } = req.body
-
-            if (!token) {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
                 return res.status(401).json({ error: '请先登录' })
             }
-
-            const payload = verifyToken(token as string)
+            
+            const token = authHeader.split(' ')[1]
+            const payload = verifyToken(token)
             if (!payload) {
                 return res.status(401).json({ error: 'Token无效或已过期' })
             }
+
+            const { roomId } = req.body
 
             if (!roomId) {
                 return res.status(400).json({ error: '房间ID不能为空' })
