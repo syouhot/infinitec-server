@@ -69,7 +69,59 @@ interface ResetPasswordRequestBody {
     phone: string
 }
 
+interface FeedbackRequestBody {
+    content: string
+}
+
 export function setupRoutes(app: Express) {
+    app.post('/api/feedback', async (req: Request<{}, {}, FeedbackRequestBody>, res: Response) => {
+        try {
+            const authHeader = req.headers.authorization
+            if (!authHeader) {
+                return res.status(401).json({ error: '未授权' })
+            }
+
+            const token = authHeader.split(' ')[1]
+            const decoded = verifyToken(token) as { userId: string } | null
+
+            if (!decoded || !decoded.userId) {
+                return res.status(401).json({ error: '无效的令牌' })
+            }
+
+            const { content } = req.body
+            if (!content || !content.trim()) {
+                return res.status(400).json({ error: '反馈内容不能为空' })
+            }
+
+            if (content.length > 1000) {
+                 return res.status(400).json({ error: '反馈内容不能超过1000字' })
+            }
+
+            const user = await prisma.user.findUnique({
+                where: { id: decoded.userId }
+            })
+
+            if (!user) {
+                return res.status(404).json({ error: '用户不存在' })
+            }
+
+            await prisma.feedback.create({
+                data: {
+                    userId: user.id,
+                    userEmail: user.email,
+                    content: content,
+                    status: 'pending'
+                }
+            })
+
+            res.json({ success: true, message: '提交成功' })
+
+        } catch (error) {
+            console.error('Feedback error:', error)
+            res.status(500).json({ error: '提交失败，请稍后重试' })
+        }
+    })
+
     app.post('/api/reset-password', async (req: Request<{}, {}, ResetPasswordRequestBody>, res: Response) => {
         try {
             const { email, phone } = req.body

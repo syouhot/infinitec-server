@@ -21,6 +21,7 @@ model User {
   drawings DrawingPath[]
   ownedRooms Room[] @relation("RoomOwner")
   roomMembers RoomMember[]
+  feedbacks Feedback[]
 }
 
 model DrawingPath {
@@ -84,4 +85,17 @@ model RoomSnapshot {
   layerOrder String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model Feedback {
+  id        String   @id @default(cuid())
+  userId    String
+  userEmail String
+  content   String   @db.Text
+  status    String   @default("pending") // pending, solved, rejected
+  note      String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
