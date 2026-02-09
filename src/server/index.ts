@@ -337,7 +337,7 @@ export function setupRoutes(app: Express) {
                 userId: user.id,
                 name: user.name,
                 phone: user.phone || undefined,
-                email: user.email || undefined
+                email: user.email || ''
             })
 
             res.json({
@@ -458,7 +458,7 @@ export function setupRoutes(app: Express) {
                 where: { id: payload.userId },
                 data: { 
                     name, 
-                    phone: phone || null 
+                    phone: phone || undefined 
                 }
             })
 
@@ -466,7 +466,7 @@ export function setupRoutes(app: Express) {
                 userId: updatedUser.id,
                 name: updatedUser.name,
                 phone: updatedUser.phone || undefined,
-                email: updatedUser.email || undefined
+                email: updatedUser.email || ''
             })
 
             res.json({

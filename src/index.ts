@@ -237,7 +237,7 @@ wss.on('connection', (ws: any, req: any) => {
     }
   })
 
-  ws.on('error', (error) => {
+  ws.on('error', (error: Error) => {
     console.error('WebSocket错误:')
     // console.error('WebSocket错误:', error)
   })
